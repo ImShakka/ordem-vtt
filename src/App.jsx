@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Dice5, Image as ImageIcon, Users, MessageSquare, PlusCircle, X, Upload, Trash2, Maximize, Edit2, ChevronDown, ChevronRight, ZoomIn, ZoomOut, Pin, LocateFixed, MousePointer2, Hand, Pen, Eraser, Undo2, Wand2, Crosshair, ArrowUp, ArrowDown, Grid3x3 } from 'lucide-react';
+import { Dice5, Image as ImageIcon, Users, MessageSquare, PlusCircle, X, Upload, Trash2, Maximize, Edit2, ChevronDown, ChevronRight, ZoomIn, ZoomOut, Pin, LocateFixed, MousePointer2, Hand, Pen, Eraser, Undo2, Wand2, Crosshair, ArrowUp, ArrowDown, Grid3x3, Paperclip, Send } from 'lucide-react';
 import Cropper from 'react-easy-crop';
 import { io } from 'socket.io-client';
 import EmojiPicker from 'emoji-picker-react';
@@ -27,17 +27,21 @@ export default function App() {
   const [savedMaps, setSavedMaps] = useState([]);
   const [savedTokens, setSavedTokens] = useState([]); 
   
-  const [rolls, setRolls] = useState([]);
   const [boardTokens, setBoardTokens] = useState([]); 
   const [lines, setLines] = useState([]);
   const [currentLine, setCurrentLine] = useState(null);
   
+  // ESTADOS DO CHAT UNIFICADO
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatImageFile, setChatImageFile] = useState(null);
+  const [isSendingChat, setIsSendingChat] = useState(false);
+  const chatEndRef = useRef(null);
+  
   const [activeTool, setActiveTool] = useState('cursor'); 
   const [activeSubmenu, setActiveSubmenu] = useState(null); 
-  
   const [penColor, setPenColor] = useState('#ef4444');
   const [isDrawing, setIsDrawing] = useState(false); 
-  
   const [gridScale, setGridScale] = useState("1.5");
   const [selectedEmoji, setSelectedEmoji] = useState('🔥');
 
@@ -50,8 +54,8 @@ export default function App() {
   const [selectionBox, setSelectionBox] = useState({ startX: 0, startY: 0, endX: 0, endY: 0, isSelecting: false });
   
   const [isCenariosOpen, setIsCenariosOpen] = useState(false);
-  const [isPersonagensOpen, setIsPersonagensOpen] = useState(true);
-
+  const [isPersonagensOpen, setIsPersonagensOpen] = useState(false);
+  
   const [isUploadingMap, setIsUploadingMap] = useState(false);
   const [newMapName, setNewMapName] = useState('');
   const [mapFile, setMapFile] = useState(null);
@@ -79,7 +83,7 @@ export default function App() {
 
   useEffect(() => {
     socket.on('gameState', (state) => { 
-      setCurrentMap(state.currentMap); setBoardTokens(Object.values(state.tokens)); setRolls(state.rolls); setLines(state.lines || []); 
+      setCurrentMap(state.currentMap); setBoardTokens(Object.values(state.tokens)); setChatMessages(state.chat || []); setLines(state.lines || []); 
     });
     socket.on('takenRoles', (roles) => setTakenRoles(roles));
     socket.on('savedMaps', (maps) => setSavedMaps(maps));
@@ -96,7 +100,7 @@ export default function App() {
       setBoardTokens((prev) => prev.filter(t => t.id !== tokenId));
       setSelectedTokenIds((prev) => prev.filter(id => id !== tokenId)); 
     });
-    socket.on('diceRolled', (newRolls) => setRolls(newRolls));
+    socket.on('chatUpdated', (msgs) => setChatMessages(msgs));
     socket.on('lineAdded', (newLine) => setLines(prev => [...prev, newLine]));
     socket.on('lineRemoved', (lineId) => {
       setLines(prev => prev.filter(l => l.id !== lineId));
@@ -105,11 +109,15 @@ export default function App() {
 
     return () => {
       socket.off('gameState'); socket.off('takenRoles'); socket.off('savedMaps'); socket.off('savedTokens'); 
-      socket.off('mapUpdated'); socket.off('tokenUpdated'); socket.off('tokenDeleted'); socket.off('diceRolled');
+      socket.off('mapUpdated'); socket.off('tokenUpdated'); socket.off('tokenDeleted'); socket.off('chatUpdated');
       socket.off('lineAdded'); socket.off('lineRemoved');
     };
   }, []);
 
+  // Auto-scroll do chat
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
+
+  // Bloqueio de Zoom
   useEffect(() => {
     const handleGlobalWheel = (e) => {
       const isCameraTool = activeToolRef.current === 'camera';
@@ -137,33 +145,31 @@ export default function App() {
     return () => window.removeEventListener('wheel', handleGlobalWheel);
   }, []);
 
+  // Atalhos Globais
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (isModalOpen) return;
+      if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'textarea') return;
+      if (e.key === 'Delete') {
+        if (selectedTokenIds.length > 0 || selectedLineIds.length > 0) { e.preventDefault(); deleteSelection(); }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndoLine(); }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedTokenIds, selectedLineIds, lines, playerName, isModalOpen]);
+
   const handleToolClick = (tool) => {
-    if (tool === 'cursor' || tool === 'camera' || tool === 'eraser') {
-      setActiveTool(tool); setActiveSubmenu(null); return;
-    }
+    if (tool === 'cursor' || tool === 'camera' || tool === 'eraser') { setActiveTool(tool); setActiveSubmenu(null); return; }
     if (activeTool === tool) {
-      if (activeSubmenu === tool) {
-        setActiveTool('cursor'); setActiveSubmenu(null);
-      } else { setActiveSubmenu(tool); }
+      if (activeSubmenu === tool) { setActiveTool('cursor'); setActiveSubmenu(null); } else { setActiveSubmenu(tool); }
     } else {
       setActiveTool(tool); setActiveSubmenu(tool);
     }
   };
 
-  const getLayer = (item) => {
-    if (item.layer) return item.layer;
-    if (item.points || item.type === 'effect') return 3; 
-    return 2; 
-  };
-
-  const getZIndex = (item, isSelected) => {
-    const layer = getLayer(item); 
-    const baseZ = layer === 2 ? 20 : 30; 
-    let subZ = 2; 
-    if (item.type === 'effect') subZ = 1; 
-    if (isSelected) subZ += 5; 
-    return baseZ + subZ;
-  };
+  const getLayer = (item) => { if (item.layer) return item.layer; if (item.points || item.type === 'effect') return 3; return 2; };
+  const getZIndex = (item, isSelected) => { const layer = getLayer(item); const baseZ = layer === 2 ? 20 : 30; let subZ = 2; if (item.type === 'effect') subZ = 1; if (isSelected) subZ += 5; return baseZ + subZ; };
 
   const setSelectionLayer = (newLayer) => {
     selectedTokenIds.forEach(id => {
@@ -172,10 +178,7 @@ export default function App() {
     });
     selectedLineIds.forEach(id => {
       const l = lines.find(bl => bl.id === id);
-      if (l && getLayer(l) !== newLayer) {
-        socket.emit('removeLine', l.id);
-        socket.emit('addLine', { ...l, layer: newLayer });
-      }
+      if (l && getLayer(l) !== newLayer) { socket.emit('removeLine', l.id); socket.emit('addLine', { ...l, layer: newLayer }); }
     });
     setContextMenu(null);
   };
@@ -243,40 +246,20 @@ export default function App() {
       const y = (e.clientY - rect.top - mapTransform.y) / mapTransform.scale;
 
       if (activeTool === 'camera') { e.preventDefault(); setIsPanning(true); return; }
-      
-      if (activeTool === 'pen') {
-        e.preventDefault(); setIsDrawing(true);
-        setCurrentLine({ id: Date.now().toString(), type: 'pen', color: penColor, size: 4, points: [{x, y}], author: playerName, layer: 3 });
-        return;
-      }
-      
+      if (activeTool === 'pen') { e.preventDefault(); setIsDrawing(true); setCurrentLine({ id: Date.now().toString(), type: 'pen', color: penColor, size: 4, points: [{x, y}], author: playerName, layer: 3 }); return; }
       if (activeTool === 'laser') {
         e.preventDefault(); setIsDrawing(true);
         const parseScale = parseFloat(gridScale) || 1.5;
-        setCurrentLine({ id: Date.now().toString(), type: 'laser', color: '#ef4444', size: 3, points: [{x, y}, {x, y}], author: playerName, layer: 3, gridScale: parseScale });
-        return;
+        setCurrentLine({ id: Date.now().toString(), type: 'laser', color: '#ef4444', size: 3, points: [{x, y}, {x, y}], author: playerName, layer: 3, gridScale: parseScale }); return;
       }
-      
       if (activeTool === 'effects') {
         e.preventDefault(); 
-        socket.emit('updateToken', { 
-          id: Date.now().toString() + Math.random().toString(36).substr(2, 5), 
-          name: selectedEmoji, 
-          type: 'effect', 
-          x: x - 24, 
-          y: y - 24, 
-          size: 48, 
-          isPinned: false, 
-          layer: 3 
-        });
+        socket.emit('updateToken', { id: Date.now().toString() + Math.random().toString(36).substr(2, 5), name: selectedEmoji, type: 'effect', x: x - 24, y: y - 24, size: 48, isPinned: false, layer: 3 });
         return;
       }
-      
       if (activeTool === 'eraser') { e.preventDefault(); setIsDrawing(true); return; }
-
       if (activeTool === 'cursor') {
-        if (e.shiftKey) {
-          e.preventDefault(); setSelectionBox({ startX: x, startY: y, endX: x, endY: y, isSelecting: true });
+        if (e.shiftKey) { e.preventDefault(); setSelectionBox({ startX: x, startY: y, endX: x, endY: y, isSelecting: true });
         } else { setSelectedTokenIds([]); setSelectedLineIds([]); }
       }
     }
@@ -292,21 +275,15 @@ export default function App() {
         newX = Math.min(0, Math.max(newX, rect.width * (1 - prev.scale)));
         newY = Math.min(0, Math.max(newY, rect.height * (1 - prev.scale)));
         return { ...prev, x: newX, y: newY };
-      });
-      return;
+      }); return;
     }
 
     const rect = e.currentTarget.getBoundingClientRect();
     const currentX = (e.clientX - rect.left - mapTransform.x) / mapTransform.scale; 
     const currentY = (e.clientY - rect.top - mapTransform.y) / mapTransform.scale;
 
-    if (activeTool === 'pen' && isDrawing && currentLine) {
-      setCurrentLine(prev => ({ ...prev, points: [...prev.points, {x: currentX, y: currentY}] })); return;
-    }
-    
-    if (activeTool === 'laser' && isDrawing && currentLine) {
-      setCurrentLine(prev => ({ ...prev, points: [prev.points[0], {x: currentX, y: currentY}] })); return;
-    }
+    if (activeTool === 'pen' && isDrawing && currentLine) { setCurrentLine(prev => ({ ...prev, points: [...prev.points, {x: currentX, y: currentY}] })); return; }
+    if (activeTool === 'laser' && isDrawing && currentLine) { setCurrentLine(prev => ({ ...prev, points: [prev.points[0], {x: currentX, y: currentY}] })); return; }
 
     if (selectionBox.isSelecting && activeTool === 'cursor') {
       setSelectionBox(prev => ({ ...prev, endX: currentX, endY: currentY }));
@@ -320,27 +297,21 @@ export default function App() {
       }).map(t => t.id);
       setSelectedTokenIds(selectedT);
 
-      const selectedL = lines.filter(l => {
-        return l.points.some(p => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY);
-      }).map(l => l.id);
+      const selectedL = lines.filter(l => { return l.points.some(p => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY); }).map(l => l.id);
       setSelectedLineIds(selectedL);
     }
   };
 
   const handleMapMouseUp = (e) => { 
     setIsPanning(false);
-    if ((activeTool === 'pen' || activeTool === 'laser') && isDrawing && currentLine) {
-      setIsDrawing(false); socket.emit('addLine', currentLine); setCurrentLine(null);
-    }
+    if ((activeTool === 'pen' || activeTool === 'laser') && isDrawing && currentLine) { setIsDrawing(false); socket.emit('addLine', currentLine); setCurrentLine(null); }
     if (activeTool === 'eraser') setIsDrawing(false);
     if (selectionBox.isSelecting) setSelectionBox(prev => ({ ...prev, isSelecting: false })); 
   };
 
   const handleMapMouseLeave = () => {
     setIsPanning(false);
-    if ((activeTool === 'pen' || activeTool === 'laser') && isDrawing && currentLine) {
-      setIsDrawing(false); socket.emit('addLine', currentLine); setCurrentLine(null);
-    }
+    if ((activeTool === 'pen' || activeTool === 'laser') && isDrawing && currentLine) { setIsDrawing(false); socket.emit('addLine', currentLine); setCurrentLine(null); }
     if (activeTool === 'eraser') setIsDrawing(false);
     if (selectionBox.isSelecting) setSelectionBox(prev => ({ ...prev, isSelecting: false }));
   };
@@ -377,12 +348,9 @@ export default function App() {
     const libraryTokenStr = e.dataTransfer.getData('libraryToken');
     if (libraryTokenStr) {
       const libraryToken = JSON.parse(libraryTokenStr);
-      
       if (libraryToken.type === 'player' && boardTokens.some(t => t.type === 'player' && t.name === libraryToken.name)) {
-        alert(`O jogador ${libraryToken.name} já está no mapa!`);
-        return;
+        alert(`O jogador ${libraryToken.name} já está no mapa!`); return;
       }
-
       const size = libraryToken.size || 48;
       const newX = (e.clientX - rect.left - mapTransform.x) / mapTransform.scale - (size / 2);
       const newY = (e.clientY - rect.top - mapTransform.y) / mapTransform.scale - (size / 2);
@@ -394,8 +362,7 @@ export default function App() {
     if (activeTool !== 'cursor') return; 
     e.stopPropagation(); closeContextMenu(); if (e.shiftKey) return; 
     if (e.ctrlKey || e.metaKey) {
-      if (selectedTokenIds.includes(id)) setSelectedTokenIds(prev => prev.filter(tid => tid !== id)); 
-      else setSelectedTokenIds(prev => [...prev, id]); 
+      if (selectedTokenIds.includes(id)) setSelectedTokenIds(prev => prev.filter(tid => tid !== id)); else setSelectedTokenIds(prev => [...prev, id]); 
     } else { setSelectedTokenIds([id]); setSelectedLineIds([]); }
   };
 
@@ -403,16 +370,12 @@ export default function App() {
     if (activeTool !== 'cursor') return;
     e.stopPropagation(); closeContextMenu(); if (e.shiftKey) return;
     if (e.ctrlKey || e.metaKey) {
-      if (selectedLineIds.includes(id)) setSelectedLineIds(prev => prev.filter(tid => tid !== id)); 
-      else setSelectedLineIds(prev => [...prev, id]); 
+      if (selectedLineIds.includes(id)) setSelectedLineIds(prev => prev.filter(tid => tid !== id)); else setSelectedLineIds(prev => [...prev, id]); 
     } else { setSelectedLineIds([id]); setSelectedTokenIds([]); }
   };
 
   const togglePinTokens = (ids) => {
-    ids.forEach(id => {
-      const t = boardTokens.find(bt => bt.id === id);
-      if (t) socket.emit('updateToken', { ...t, isPinned: !t.isPinned });
-    });
+    ids.forEach(id => { const t = boardTokens.find(bt => bt.id === id); if (t) socket.emit('updateToken', { ...t, isPinned: !t.isPinned }); });
   };
 
   const handleUndoLine = () => {
@@ -421,37 +384,65 @@ export default function App() {
     setContextMenu(null);
   };
 
-  // ====== ATALHOS DE TECLADO ======
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (isModalOpen) return;
-      if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'textarea') return;
-
-      // Apagar: Tecla Delete
-      if (e.key === 'Delete') {
-        if (selectedTokenIds.length > 0 || selectedLineIds.length > 0) {
-          e.preventDefault();
-          deleteSelection();
-        }
-      }
-
-      // Desfazer
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        handleUndoLine();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedTokenIds, selectedLineIds, lines, playerName, isModalOpen]);
-
   const uploadFileToServer = async (file) => {
     const formData = new FormData(); formData.append('image', file);
     const response = await fetch(`${SERVER_URL}/upload`, { method: 'POST', body: formData });
     return (await response.json()).url;
   };
 
+  // ====== FUNCOES DO CHAT ======
+  const sendChatMessage = async (e) => {
+    e.preventDefault();
+    if (!chatInput.trim() && !chatImageFile) return;
+    setIsSendingChat(true);
+
+    let uploadedImageUrl = null;
+    if (chatImageFile) {
+      try {
+        uploadedImageUrl = await uploadFileToServer(chatImageFile);
+      } catch (err) { alert("Erro ao enviar imagem."); setIsSendingChat(false); return; }
+    }
+
+    const msg = {
+      id: Date.now().toString(),
+      type: 'text',
+      author: playerName,
+      text: chatInput.trim(),
+      imageUrl: uploadedImageUrl,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    socket.emit('sendChatMessage', msg);
+    setChatInput(''); setChatImageFile(null); setIsSendingChat(false);
+  };
+
+  const rollDice = (sides) => {
+    const result = Math.floor(Math.random() * sides) + 1;
+    const msg = {
+      id: Date.now().toString(),
+      type: 'roll',
+      author: playerName,
+      text: `Rolou um D${sides}: Tirou ${result}`,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+    socket.emit('sendChatMessage', msg);
+  };
+
+  const handleClearChat = () => { 
+    if (playerName !== 'Mestre' && playerName !== 'Buratino') return;
+    if (window.confirm("Isso vai apagar todo o histórico de rolagens e do chat para todos. Tem certeza?")) {
+        socket.emit('clearChat'); 
+    }
+  };
+  
+  const handleDeleteMessage = (msgId) => {
+    if (playerName !== 'Mestre' && playerName !== 'Buratino') return;
+    if (window.confirm("Apagar esta mensagem?")) {
+      socket.emit('deleteChatMessage', msgId);
+    }
+  };
+
+  // Upload mapa, salvar Token, etc
   const handleMapUpload = async (e) => {
     e.preventDefault(); if (!newMapName.trim() || !mapFile) return; setIsUploadingMap(true);
     try {
@@ -461,20 +452,9 @@ export default function App() {
     } catch { alert("Erro ao enviar mapa."); } setIsUploadingMap(false);
   };
 
-  const rollDice = (sides) => socket.emit('rollDice', `[${playerName}] rolou um D${sides}: Tirou ${Math.floor(Math.random() * sides) + 1}`);
+  const onFileChange = (e) => { if (e.target.files && e.target.files.length > 0) { const reader = new FileReader(); reader.readAsDataURL(e.target.files[0]); reader.onload = () => setImageSrc(reader.result); } };
 
-  const handleClearDiceRolls = () => { if (window.confirm("Isso vai apagar o histórico de rolagens de todos na mesa. Tem certeza?")) socket.emit('clearDiceRolls'); };
-
-  const onFileChange = (e) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const reader = new FileReader(); reader.readAsDataURL(e.target.files[0]); reader.onload = () => setImageSrc(reader.result);
-    }
-  };
-
-  const confirmCrop = async () => {
-    const croppedBlob = await getCroppedImg(imageSrc, croppedAreaPixels);
-    setFinalCroppedBlob(croppedBlob); setImageSrc(null); 
-  };
+  const confirmCrop = async () => { const croppedBlob = await getCroppedImg(imageSrc, croppedAreaPixels); setFinalCroppedBlob(croppedBlob); setImageSrc(null); };
 
   const saveTokenSubmit = async (e) => {
     e.preventDefault(); if (!newToken.name.trim()) return; setIsUploadingToken(true);
@@ -490,11 +470,8 @@ export default function App() {
       else { 
         const newLibToken = { id: Date.now().toString(), ...tokenData, isFixed: false };
         socket.emit('saveNewToken', newLibToken); 
-        
         if (pendingSpawnCoords) { 
-          if (newLibToken.type === 'player' && boardTokens.some(t => t.type === 'player' && t.name === newLibToken.name)) {
-            alert(`O template foi salvo, mas o jogador ${newLibToken.name} já está no mapa!`);
-          } else {
+          if (newLibToken.type === 'player' && boardTokens.some(t => t.type === 'player' && t.name === newLibToken.name)) { alert(`O template foi salvo, mas o jogador ${newLibToken.name} já está no mapa!`); } else {
             socket.emit('updateToken', { ...newLibToken, id: newLibToken.id + Math.random().toString(36).substr(2, 5), x: pendingSpawnCoords.x - 24, y: pendingSpawnCoords.y - 24, isPinned: false }); 
           }
         }
@@ -504,10 +481,7 @@ export default function App() {
   };
 
   const spawnTokenOnMap = (savedToken) => {
-    if (savedToken.type === 'player' && boardTokens.some(t => t.type === 'player' && t.name === savedToken.name)) {
-      alert(`O jogador ${savedToken.name} já está no mapa!`);
-      return;
-    }
+    if (savedToken.type === 'player' && boardTokens.some(t => t.type === 'player' && t.name === savedToken.name)) { alert(`O jogador ${savedToken.name} já está no mapa!`); return; }
     socket.emit('updateToken', { ...savedToken, id: Date.now().toString() + Math.random().toString(36).substr(2, 5), x: 100, y: 100, isPinned: false, layer: 2 });
   };
   
@@ -652,7 +626,6 @@ export default function App() {
             )}
           </div>
 
-          {/* GRADE (GRID) */}
           <div className="w-full h-px bg-neutral-800 my-2"></div>
           <div className="relative w-full">
             <button title="Exibir/Ocultar Grade (Grid)" 
@@ -806,7 +779,7 @@ export default function App() {
             )
           })}
 
-          {/* CAIXA DE SELEÇÃO */}
+          {/* CAIXA DE SELECAO */}
           {selectionBox.isSelecting && activeTool === 'cursor' && (
             <div className="absolute border-2 border-emerald-500 bg-emerald-500/20 border-dashed pointer-events-none" style={{ zIndex: 50, left: Math.min(selectionBox.startX, selectionBox.endX), top: Math.min(selectionBox.startY, selectionBox.endY), width: Math.abs(selectionBox.endX - selectionBox.startX), height: Math.abs(selectionBox.endY - selectionBox.startY) }} />
           )}
@@ -917,7 +890,7 @@ export default function App() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-5">
+        <div className="flex-1 overflow-y-auto p-5 flex flex-col">
           <div className="mb-6">
             <button onClick={() => setIsCenariosOpen(!isCenariosOpen)} className="w-full flex justify-between items-center text-xs font-bold text-neutral-500 mb-3 uppercase tracking-wider hover:text-white transition-colors">
               <span className="flex items-center gap-2"><ImageIcon size={14} /> Cenários</span>{isCenariosOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -967,26 +940,79 @@ export default function App() {
               </div>
             )}
           </div>
+          
+          {/* ====== CHAT (min-h-[480px]) ====== */}
+          <div className="flex-1 flex flex-col h-full min-h-[480px] border border-neutral-800 rounded bg-neutral-900">
+            <div className="p-3 border-b border-neutral-800 flex justify-between items-center bg-neutral-950 rounded-t">
+              <h2 className="text-xs font-bold text-neutral-400 uppercase tracking-wider flex items-center gap-2"><MessageSquare size={14} /> Bate-Papo & Log</h2>
+              
+              {/* APENAS MESTRE OU BURATINO (eu hehe) PODEM APAGAR TUDO */}
+              {(playerName === 'Mestre' || playerName === 'Buratino') && (
+                <button onClick={handleClearChat} title="Apagar Histórico" className="text-neutral-500 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
+              )}
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-neutral-900/50 max-h-[400px]">
+              {chatMessages.length === 0 && <p className="text-xs text-neutral-600 text-center mt-4">Nenhuma mensagem ainda.</p>}
+              
+              {chatMessages.map(msg => (
+                <div key={msg.id} className={`text-sm relative group ${msg.type === 'roll' ? 'border-l-2 border-red-600 bg-neutral-950 p-2' : ''}`}>
+                  <div className="flex items-baseline gap-2 mb-1">
+                    <span className="font-bold text-emerald-500 text-xs">{msg.author}</span>
+                    <span className="text-[10px] text-neutral-600">{msg.timestamp}</span>
+                  </div>
+                  
+                  {msg.text && <p className="text-neutral-300 break-words pr-6">{msg.text}</p>}
+                  
+                  {msg.imageUrl && (
+                    <a href={SERVER_URL + msg.imageUrl} target="_blank" rel="noreferrer">
+                      <img src={SERVER_URL + msg.imageUrl} alt="Anexo" className="mt-2 rounded max-w-full max-h-40 border border-neutral-700 hover:border-neutral-500 transition-colors cursor-zoom-in" />
+                    </a>
+                  )}
 
-          <div className="mb-6">
-            <h2 className="text-xs font-bold text-neutral-500 mb-3 uppercase tracking-wider flex items-center gap-2"><Dice5 size={14} /> Dados</h2>
+                  {/* APENAS MESTRE OU BURATINO PODEM APAGAR MENSAGENS INDIVIDUAIS */}
+                  {(playerName === 'Mestre' || playerName === 'Buratino') && (
+                    <button onClick={() => handleDeleteMessage(msg.id)} className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-500 transition-all p-1" title="Apagar mensagem">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
+              <div ref={chatEndRef} />
+            </div>
+
+            <form onSubmit={sendChatMessage} className="p-2 border-t border-neutral-800 bg-neutral-950 rounded-b flex flex-col gap-2">
+              {chatImageFile && (
+                <div className="flex items-center justify-between bg-neutral-800 rounded p-1 px-2">
+                  <span className="text-[10px] text-emerald-400 truncate">{chatImageFile.name}</span>
+                  <button type="button" onClick={() => setChatImageFile(null)} className="text-neutral-400 hover:text-red-500"><X size={12}/></button>
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <label className="cursor-pointer text-neutral-400 hover:text-emerald-400 transition-colors p-2 bg-neutral-900 rounded border border-neutral-700 hover:border-emerald-500">
+                  <Paperclip size={16} />
+                  <input type="file" accept="image/*" className="hidden" onChange={(e) => setChatImageFile(e.target.files[0])} />
+                </label>
+                <textarea 
+                  value={chatInput} onChange={(e) => setChatInput(e.target.value)} 
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(e); } }}
+                  placeholder="Mensagem..." 
+                  className="flex-1 bg-neutral-900 border border-neutral-700 rounded p-2 text-xs text-white focus:outline-none focus:border-emerald-500 resize-none h-[38px] max-h-[100px]"
+                />
+                <button type="submit" disabled={isSendingChat || (!chatInput.trim() && !chatImageFile)} className="bg-emerald-600 hover:bg-emerald-500 text-white p-2 rounded disabled:opacity-50 transition-colors">
+                  <Send size={16} />
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-neutral-800">
+            <h2 className="text-xs font-bold text-neutral-500 mb-3 uppercase tracking-wider flex items-center gap-2"><Dice5 size={14} /> Rolar Dados Rápidos</h2>
             <div className="grid grid-cols-4 gap-2">
               {[20, 12, 10, 8, 6, 4].map(d => <button key={d} onClick={() => rollDice(d)} className="bg-neutral-800 hover:bg-red-900 border border-neutral-700 hover:border-red-500 rounded py-2 text-xs font-bold transition-all">D{d}</button>)}
             </div>
           </div>
           
-          <div className="flex-1 flex flex-col h-full min-h-[250px]">
-            <div className="flex justify-between items-center mb-3">
-              <h2 className="text-xs font-bold text-neutral-500 uppercase tracking-wider flex items-center gap-2"><MessageSquare size={14} /> Histórico</h2>
-              <button onClick={handleClearDiceRolls} title="Apagar Histórico" className="text-neutral-500 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
-            </div>
-            <div className="space-y-2 flex-1 overflow-y-auto pr-1">
-              {rolls.length === 0 && <p className="text-xs text-neutral-600">Nenhum dado rolado ainda.</p>}
-              {rolls.map(roll => (
-                <div key={roll.id} className="bg-neutral-900 border-l-2 border-red-600 p-3 text-sm text-neutral-300"><span className="font-bold text-white block text-xs mb-1">{roll.text.split(']')[0]}]</span>{roll.text.split(']')[1]}</div>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
 
