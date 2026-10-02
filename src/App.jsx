@@ -421,6 +421,31 @@ export default function App() {
     setContextMenu(null);
   };
 
+  // ====== ATALHOS DE TECLADO ======
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (isModalOpen) return;
+      if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'textarea') return;
+
+      // Apagar: Tecla Delete
+      if (e.key === 'Delete') {
+        if (selectedTokenIds.length > 0 || selectedLineIds.length > 0) {
+          e.preventDefault();
+          deleteSelection();
+        }
+      }
+
+      // Desfazer
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        handleUndoLine();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedTokenIds, selectedLineIds, lines, playerName, isModalOpen]);
+
   const uploadFileToServer = async (file) => {
     const formData = new FormData(); formData.append('image', file);
     const response = await fetch(`${SERVER_URL}/upload`, { method: 'POST', body: formData });
