@@ -49,6 +49,7 @@ npm install express socket.io multer cors
 
 # Inicie o servidor na porta 3001
 node server.js
+```
 
 ### 2. Preparando a Interface (FrontEnd)
 No computador de desenvolvimento (Ubuntu/Windows):
@@ -61,5 +62,6 @@ npm run dev
 
 # Para compilar a versão final que irá para o Servidor:
 npm run build
+```
 
 Após o npm run build, copie a pasta dist gerada para dentro da pasta do servidor no Raspberry Pi. O Node.js subir essa pasta automaticamente na porta 3001
