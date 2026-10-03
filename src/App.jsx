@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Dice5, Image as ImageIcon, Users, MessageSquare, PlusCircle, X, Upload, Trash2, Maximize, Edit2, ChevronDown, ChevronRight, ZoomIn, ZoomOut, Pin, LocateFixed, MousePointer2, Hand, Pen, Eraser, Undo2, Wand2, Crosshair, ArrowUp, ArrowDown, Grid3x3, Paperclip, Send } from 'lucide-react';
+import { Dice5, Image as ImageIcon, Users, MessageSquare, PlusCircle, X, Upload, Trash2, Maximize, Edit2, ChevronDown, ChevronRight, ZoomIn, ZoomOut, Pin, LocateFixed, MousePointer2, Hand, Pen, Eraser, Undo2, Wand2, Crosshair, ArrowUp, ArrowDown, Grid3x3, Paperclip, Send, Music, Play, Pause, Square, Volume2 } from 'lucide-react';
 import Cropper from 'react-easy-crop';
 import { io } from 'socket.io-client';
 import EmojiPicker from 'emoji-picker-react';
@@ -27,21 +27,17 @@ export default function App() {
   const [savedMaps, setSavedMaps] = useState([]);
   const [savedTokens, setSavedTokens] = useState([]); 
   
+  const [rolls, setRolls] = useState([]);
   const [boardTokens, setBoardTokens] = useState([]); 
   const [lines, setLines] = useState([]);
   const [currentLine, setCurrentLine] = useState(null);
   
-  // ESTADOS DO CHAT UNIFICADO
-  const [chatMessages, setChatMessages] = useState([]);
-  const [chatInput, setChatInput] = useState('');
-  const [chatImageFile, setChatImageFile] = useState(null);
-  const [isSendingChat, setIsSendingChat] = useState(false);
-  const chatEndRef = useRef(null);
-  
   const [activeTool, setActiveTool] = useState('cursor'); 
   const [activeSubmenu, setActiveSubmenu] = useState(null); 
+  
   const [penColor, setPenColor] = useState('#ef4444');
   const [isDrawing, setIsDrawing] = useState(false); 
+  
   const [gridScale, setGridScale] = useState("1.5");
   const [selectedEmoji, setSelectedEmoji] = useState('🔥');
 
@@ -55,7 +51,7 @@ export default function App() {
   
   const [isCenariosOpen, setIsCenariosOpen] = useState(false);
   const [isPersonagensOpen, setIsPersonagensOpen] = useState(false);
-  
+
   const [isUploadingMap, setIsUploadingMap] = useState(false);
   const [newMapName, setNewMapName] = useState('');
   const [mapFile, setMapFile] = useState(null);
@@ -78,12 +74,27 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState(null);
   const [pendingSpawnCoords, setPendingSpawnCoords] = useState(null);
 
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatImageFile, setChatImageFile] = useState(null);
+  const [isSendingChat, setIsSendingChat] = useState(false);
+  const chatEndRef = useRef(null);
+
+  const [savedTracks, setSavedTracks] = useState([]);
+  const [currentAudio, setCurrentAudio] = useState({ url: '', isPlaying: false, name: '' });
+  const [isTrilhasOpen, setIsTrilhasOpen] = useState(false);
+  const [audioVolume, setAudioVolume] = useState(0.3); // Volume padrão 30%
+  const [isUploadingTrack, setIsUploadingTrack] = useState(false);
+  const audioRef = useRef(null);
+
   const activeToolRef = useRef(activeTool);
   useEffect(() => { activeToolRef.current = activeTool; }, [activeTool]);
 
   useEffect(() => {
     socket.on('gameState', (state) => { 
       setCurrentMap(state.currentMap); setBoardTokens(Object.values(state.tokens)); setChatMessages(state.chat || []); setLines(state.lines || []); 
+      setSavedTracks(state.savedTracks || []);
+      if(state.currentAudio) setCurrentAudio(state.currentAudio);
     });
     socket.on('takenRoles', (roles) => setTakenRoles(roles));
     socket.on('savedMaps', (maps) => setSavedMaps(maps));
@@ -107,17 +118,39 @@ export default function App() {
       setSelectedLineIds((prev) => prev.filter(id => id !== lineId)); 
     });
 
+    socket.on('savedTracks', (tracks) => setSavedTracks(tracks));
+    socket.on('audioStateUpdated', (audioState) => setCurrentAudio(audioState));
+
     return () => {
       socket.off('gameState'); socket.off('takenRoles'); socket.off('savedMaps'); socket.off('savedTokens'); 
       socket.off('mapUpdated'); socket.off('tokenUpdated'); socket.off('tokenDeleted'); socket.off('chatUpdated');
-      socket.off('lineAdded'); socket.off('lineRemoved');
+      socket.off('lineAdded'); socket.off('lineRemoved'); socket.off('savedTracks'); socket.off('audioStateUpdated');
     };
   }, []);
 
-  // Auto-scroll do chat
+  useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.volume = audioVolume;
+    
+    if (currentAudio.url) {
+      const fullUrl = SERVER_URL + currentAudio.url;
+      if (audioRef.current.src !== fullUrl) {
+        audioRef.current.src = fullUrl;
+      }
+      if (currentAudio.isPlaying) {
+        // Tenta tocar (o navegador permite pois o jogador já clicou no menu de login antes)
+        audioRef.current.play().catch(e => console.warn("Aguardando interação para tocar o áudio"));
+      } else {
+        audioRef.current.pause();
+      }
+    } else {
+      audioRef.current.pause();
+      audioRef.current.src = '';
+    }
+  }, [currentAudio, audioVolume]);
+
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
 
-  // Bloqueio de Zoom
   useEffect(() => {
     const handleGlobalWheel = (e) => {
       const isCameraTool = activeToolRef.current === 'camera';
@@ -145,31 +178,33 @@ export default function App() {
     return () => window.removeEventListener('wheel', handleGlobalWheel);
   }, []);
 
-  // Atalhos Globais
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (isModalOpen) return;
-      if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'textarea') return;
-      if (e.key === 'Delete') {
-        if (selectedTokenIds.length > 0 || selectedLineIds.length > 0) { e.preventDefault(); deleteSelection(); }
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndoLine(); }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedTokenIds, selectedLineIds, lines, playerName, isModalOpen]);
-
   const handleToolClick = (tool) => {
-    if (tool === 'cursor' || tool === 'camera' || tool === 'eraser') { setActiveTool(tool); setActiveSubmenu(null); return; }
+    if (tool === 'cursor' || tool === 'camera' || tool === 'eraser') {
+      setActiveTool(tool); setActiveSubmenu(null); return;
+    }
     if (activeTool === tool) {
-      if (activeSubmenu === tool) { setActiveTool('cursor'); setActiveSubmenu(null); } else { setActiveSubmenu(tool); }
+      if (activeSubmenu === tool) {
+        setActiveTool('cursor'); setActiveSubmenu(null);
+      } else { setActiveSubmenu(tool); }
     } else {
       setActiveTool(tool); setActiveSubmenu(tool);
     }
   };
 
-  const getLayer = (item) => { if (item.layer) return item.layer; if (item.points || item.type === 'effect') return 3; return 2; };
-  const getZIndex = (item, isSelected) => { const layer = getLayer(item); const baseZ = layer === 2 ? 20 : 30; let subZ = 2; if (item.type === 'effect') subZ = 1; if (isSelected) subZ += 5; return baseZ + subZ; };
+  const getLayer = (item) => {
+    if (item.layer) return item.layer;
+    if (item.points || item.type === 'effect') return 3; 
+    return 2; 
+  };
+
+  const getZIndex = (item, isSelected) => {
+    const layer = getLayer(item); 
+    const baseZ = layer === 2 ? 20 : 30; 
+    let subZ = 2; 
+    if (item.type === 'effect') subZ = 1; 
+    if (isSelected) subZ += 5; 
+    return baseZ + subZ;
+  };
 
   const setSelectionLayer = (newLayer) => {
     selectedTokenIds.forEach(id => {
@@ -178,7 +213,10 @@ export default function App() {
     });
     selectedLineIds.forEach(id => {
       const l = lines.find(bl => bl.id === id);
-      if (l && getLayer(l) !== newLayer) { socket.emit('removeLine', l.id); socket.emit('addLine', { ...l, layer: newLayer }); }
+      if (l && getLayer(l) !== newLayer) {
+        socket.emit('removeLine', l.id);
+        socket.emit('addLine', { ...l, layer: newLayer });
+      }
     });
     setContextMenu(null);
   };
@@ -246,20 +284,40 @@ export default function App() {
       const y = (e.clientY - rect.top - mapTransform.y) / mapTransform.scale;
 
       if (activeTool === 'camera') { e.preventDefault(); setIsPanning(true); return; }
-      if (activeTool === 'pen') { e.preventDefault(); setIsDrawing(true); setCurrentLine({ id: Date.now().toString(), type: 'pen', color: penColor, size: 4, points: [{x, y}], author: playerName, layer: 3 }); return; }
+      
+      if (activeTool === 'pen') {
+        e.preventDefault(); setIsDrawing(true);
+        setCurrentLine({ id: Date.now().toString(), type: 'pen', color: penColor, size: 4, points: [{x, y}], author: playerName, layer: 3 });
+        return;
+      }
+      
       if (activeTool === 'laser') {
         e.preventDefault(); setIsDrawing(true);
         const parseScale = parseFloat(gridScale) || 1.5;
-        setCurrentLine({ id: Date.now().toString(), type: 'laser', color: '#ef4444', size: 3, points: [{x, y}, {x, y}], author: playerName, layer: 3, gridScale: parseScale }); return;
-      }
-      if (activeTool === 'effects') {
-        e.preventDefault(); 
-        socket.emit('updateToken', { id: Date.now().toString() + Math.random().toString(36).substr(2, 5), name: selectedEmoji, type: 'effect', x: x - 24, y: y - 24, size: 48, isPinned: false, layer: 3 });
+        setCurrentLine({ id: Date.now().toString(), type: 'laser', color: '#ef4444', size: 3, points: [{x, y}, {x, y}], author: playerName, layer: 3, gridScale: parseScale });
         return;
       }
+      
+      if (activeTool === 'effects') {
+        e.preventDefault(); 
+        socket.emit('updateToken', { 
+          id: Date.now().toString() + Math.random().toString(36).substr(2, 5), 
+          name: selectedEmoji, 
+          type: 'effect', 
+          x: x - 24, 
+          y: y - 24, 
+          size: 48, 
+          isPinned: false, 
+          layer: 3 
+        });
+        return;
+      }
+      
       if (activeTool === 'eraser') { e.preventDefault(); setIsDrawing(true); return; }
+
       if (activeTool === 'cursor') {
-        if (e.shiftKey) { e.preventDefault(); setSelectionBox({ startX: x, startY: y, endX: x, endY: y, isSelecting: true });
+        if (e.shiftKey) {
+          e.preventDefault(); setSelectionBox({ startX: x, startY: y, endX: x, endY: y, isSelecting: true });
         } else { setSelectedTokenIds([]); setSelectedLineIds([]); }
       }
     }
@@ -275,15 +333,21 @@ export default function App() {
         newX = Math.min(0, Math.max(newX, rect.width * (1 - prev.scale)));
         newY = Math.min(0, Math.max(newY, rect.height * (1 - prev.scale)));
         return { ...prev, x: newX, y: newY };
-      }); return;
+      });
+      return;
     }
 
     const rect = e.currentTarget.getBoundingClientRect();
     const currentX = (e.clientX - rect.left - mapTransform.x) / mapTransform.scale; 
     const currentY = (e.clientY - rect.top - mapTransform.y) / mapTransform.scale;
 
-    if (activeTool === 'pen' && isDrawing && currentLine) { setCurrentLine(prev => ({ ...prev, points: [...prev.points, {x: currentX, y: currentY}] })); return; }
-    if (activeTool === 'laser' && isDrawing && currentLine) { setCurrentLine(prev => ({ ...prev, points: [prev.points[0], {x: currentX, y: currentY}] })); return; }
+    if (activeTool === 'pen' && isDrawing && currentLine) {
+      setCurrentLine(prev => ({ ...prev, points: [...prev.points, {x: currentX, y: currentY}] })); return;
+    }
+    
+    if (activeTool === 'laser' && isDrawing && currentLine) {
+      setCurrentLine(prev => ({ ...prev, points: [prev.points[0], {x: currentX, y: currentY}] })); return;
+    }
 
     if (selectionBox.isSelecting && activeTool === 'cursor') {
       setSelectionBox(prev => ({ ...prev, endX: currentX, endY: currentY }));
@@ -297,21 +361,27 @@ export default function App() {
       }).map(t => t.id);
       setSelectedTokenIds(selectedT);
 
-      const selectedL = lines.filter(l => { return l.points.some(p => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY); }).map(l => l.id);
+      const selectedL = lines.filter(l => {
+        return l.points.some(p => p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY);
+      }).map(l => l.id);
       setSelectedLineIds(selectedL);
     }
   };
 
   const handleMapMouseUp = (e) => { 
     setIsPanning(false);
-    if ((activeTool === 'pen' || activeTool === 'laser') && isDrawing && currentLine) { setIsDrawing(false); socket.emit('addLine', currentLine); setCurrentLine(null); }
+    if ((activeTool === 'pen' || activeTool === 'laser') && isDrawing && currentLine) {
+      setIsDrawing(false); socket.emit('addLine', currentLine); setCurrentLine(null);
+    }
     if (activeTool === 'eraser') setIsDrawing(false);
     if (selectionBox.isSelecting) setSelectionBox(prev => ({ ...prev, isSelecting: false })); 
   };
 
   const handleMapMouseLeave = () => {
     setIsPanning(false);
-    if ((activeTool === 'pen' || activeTool === 'laser') && isDrawing && currentLine) { setIsDrawing(false); socket.emit('addLine', currentLine); setCurrentLine(null); }
+    if ((activeTool === 'pen' || activeTool === 'laser') && isDrawing && currentLine) {
+      setIsDrawing(false); socket.emit('addLine', currentLine); setCurrentLine(null);
+    }
     if (activeTool === 'eraser') setIsDrawing(false);
     if (selectionBox.isSelecting) setSelectionBox(prev => ({ ...prev, isSelecting: false }));
   };
@@ -348,9 +418,12 @@ export default function App() {
     const libraryTokenStr = e.dataTransfer.getData('libraryToken');
     if (libraryTokenStr) {
       const libraryToken = JSON.parse(libraryTokenStr);
+      
       if (libraryToken.type === 'player' && boardTokens.some(t => t.type === 'player' && t.name === libraryToken.name)) {
-        alert(`O jogador ${libraryToken.name} já está no mapa!`); return;
+        alert(`O jogador ${libraryToken.name} já está no mapa!`);
+        return;
       }
+
       const size = libraryToken.size || 48;
       const newX = (e.clientX - rect.left - mapTransform.x) / mapTransform.scale - (size / 2);
       const newY = (e.clientY - rect.top - mapTransform.y) / mapTransform.scale - (size / 2);
@@ -362,7 +435,8 @@ export default function App() {
     if (activeTool !== 'cursor') return; 
     e.stopPropagation(); closeContextMenu(); if (e.shiftKey) return; 
     if (e.ctrlKey || e.metaKey) {
-      if (selectedTokenIds.includes(id)) setSelectedTokenIds(prev => prev.filter(tid => tid !== id)); else setSelectedTokenIds(prev => [...prev, id]); 
+      if (selectedTokenIds.includes(id)) setSelectedTokenIds(prev => prev.filter(tid => tid !== id)); 
+      else setSelectedTokenIds(prev => [...prev, id]); 
     } else { setSelectedTokenIds([id]); setSelectedLineIds([]); }
   };
 
@@ -370,12 +444,16 @@ export default function App() {
     if (activeTool !== 'cursor') return;
     e.stopPropagation(); closeContextMenu(); if (e.shiftKey) return;
     if (e.ctrlKey || e.metaKey) {
-      if (selectedLineIds.includes(id)) setSelectedLineIds(prev => prev.filter(tid => tid !== id)); else setSelectedLineIds(prev => [...prev, id]); 
+      if (selectedLineIds.includes(id)) setSelectedLineIds(prev => prev.filter(tid => tid !== id)); 
+      else setSelectedLineIds(prev => [...prev, id]); 
     } else { setSelectedLineIds([id]); setSelectedTokenIds([]); }
   };
 
   const togglePinTokens = (ids) => {
-    ids.forEach(id => { const t = boardTokens.find(bt => bt.id === id); if (t) socket.emit('updateToken', { ...t, isPinned: !t.isPinned }); });
+    ids.forEach(id => {
+      const t = boardTokens.find(bt => bt.id === id);
+      if (t) socket.emit('updateToken', { ...t, isPinned: !t.isPinned });
+    });
   };
 
   const handleUndoLine = () => {
@@ -384,13 +462,6 @@ export default function App() {
     setContextMenu(null);
   };
 
-  const uploadFileToServer = async (file) => {
-    const formData = new FormData(); formData.append('image', file);
-    const response = await fetch(`${SERVER_URL}/upload`, { method: 'POST', body: formData });
-    return (await response.json()).url;
-  };
-
-  // ====== FUNCOES DO CHAT ======
   const sendChatMessage = async (e) => {
     e.preventDefault();
     if (!chatInput.trim() && !chatImageFile) return;
@@ -442,7 +513,27 @@ export default function App() {
     }
   };
 
-  // Upload mapa, salvar Token, etc
+  const handleAudioUpload = async (e) => {
+    e.preventDefault();
+    const file = e.target.elements.audioFile.files[0];
+    if (!file) return;
+    setIsUploadingTrack(true);
+    try {
+      const formData = new FormData(); formData.append('image', file);
+      const res = await fetch(`${SERVER_URL}/upload`, { method: 'POST', body: formData });
+      const { url } = await res.json();
+      socket.emit('saveNewTrack', { id: Date.now().toString(), name: file.name.replace(/\.[^/.]+$/, ""), url });
+      e.target.reset();
+    } catch (err) { alert("Erro ao enviar música."); }
+    setIsUploadingTrack(false);
+  };
+
+  const uploadFileToServer = async (file) => {
+    const formData = new FormData(); formData.append('image', file);
+    const response = await fetch(`${SERVER_URL}/upload`, { method: 'POST', body: formData });
+    return (await response.json()).url;
+  };
+
   const handleMapUpload = async (e) => {
     e.preventDefault(); if (!newMapName.trim() || !mapFile) return; setIsUploadingMap(true);
     try {
@@ -452,9 +543,16 @@ export default function App() {
     } catch { alert("Erro ao enviar mapa."); } setIsUploadingMap(false);
   };
 
-  const onFileChange = (e) => { if (e.target.files && e.target.files.length > 0) { const reader = new FileReader(); reader.readAsDataURL(e.target.files[0]); reader.onload = () => setImageSrc(reader.result); } };
+  const onFileChange = (e) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const reader = new FileReader(); reader.readAsDataURL(e.target.files[0]); reader.onload = () => setImageSrc(reader.result);
+    }
+  };
 
-  const confirmCrop = async () => { const croppedBlob = await getCroppedImg(imageSrc, croppedAreaPixels); setFinalCroppedBlob(croppedBlob); setImageSrc(null); };
+  const confirmCrop = async () => {
+    const croppedBlob = await getCroppedImg(imageSrc, croppedAreaPixels);
+    setFinalCroppedBlob(croppedBlob); setImageSrc(null); 
+  };
 
   const saveTokenSubmit = async (e) => {
     e.preventDefault(); if (!newToken.name.trim()) return; setIsUploadingToken(true);
@@ -470,8 +568,11 @@ export default function App() {
       else { 
         const newLibToken = { id: Date.now().toString(), ...tokenData, isFixed: false };
         socket.emit('saveNewToken', newLibToken); 
+        
         if (pendingSpawnCoords) { 
-          if (newLibToken.type === 'player' && boardTokens.some(t => t.type === 'player' && t.name === newLibToken.name)) { alert(`O template foi salvo, mas o jogador ${newLibToken.name} já está no mapa!`); } else {
+          if (newLibToken.type === 'player' && boardTokens.some(t => t.type === 'player' && t.name === newLibToken.name)) {
+            alert(`O template foi salvo, mas o jogador ${newLibToken.name} já está no mapa!`);
+          } else {
             socket.emit('updateToken', { ...newLibToken, id: newLibToken.id + Math.random().toString(36).substr(2, 5), x: pendingSpawnCoords.x - 24, y: pendingSpawnCoords.y - 24, isPinned: false }); 
           }
         }
@@ -481,13 +582,31 @@ export default function App() {
   };
 
   const spawnTokenOnMap = (savedToken) => {
-    if (savedToken.type === 'player' && boardTokens.some(t => t.type === 'player' && t.name === savedToken.name)) { alert(`O jogador ${savedToken.name} já está no mapa!`); return; }
+    if (savedToken.type === 'player' && boardTokens.some(t => t.type === 'player' && t.name === savedToken.name)) {
+      alert(`O jogador ${savedToken.name} já está no mapa!`);
+      return;
+    }
     socket.emit('updateToken', { ...savedToken, id: Date.now().toString() + Math.random().toString(36).substr(2, 5), x: 100, y: 100, isPinned: false, layer: 2 });
   };
   
   const tryClaimRole = (role) => socket.emit('claimRole', role, (res) => { if (res.success) setPlayerName(role); else alert('Alguém já pegou esse personagem!'); });
   const closeModal = () => { setIsModalOpen(false); setImageSrc(null); setFinalCroppedBlob(null); setEditingToken(null); setNewToken({ name: '', type: 'player' }); setPendingSpawnCoords(null); };
   const openEditModal = (token) => { setEditingToken(token); setNewToken({ name: token.name, type: token.type }); setImageSrc(token.imageUrl || null); setFinalCroppedBlob(null); setIsModalOpen(true); };
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (isModalOpen) return;
+      if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'textarea') return;
+
+      if (e.key === 'Delete') {
+        if (selectedTokenIds.length > 0 || selectedLineIds.length > 0) { e.preventDefault(); deleteSelection(); }
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndoLine(); }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedTokenIds, selectedLineIds, lines, playerName, isModalOpen]);
 
   if (!playerName) {
     return (
@@ -567,8 +686,8 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-neutral-900 text-neutral-100 font-sans relative overflow-hidden" onClick={closeContextMenu}>
-      
-      {/* ====== BARRA LATERAL ESQUERDA ====== */}
+      <audio ref={audioRef} loop />
+
       <div className="w-16 bg-neutral-950 flex flex-col items-center py-4 border-r border-neutral-800 z-50 shadow-2xl">
         <div className="flex flex-col gap-4 w-full px-2">
           
@@ -673,7 +792,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* ====== MAPA ====== */}
       <div 
         ref={mapContainerRef} 
         className={`flex-1 relative bg-black border-r border-neutral-800 ${getMapCursorClass()}`}
@@ -697,12 +815,10 @@ export default function App() {
 
         <div id="map-layer" className="absolute inset-0 origin-top-left" style={{ transform: `translate(${mapTransform.x}px, ${mapTransform.y}px) scale(${mapTransform.scale})`, backgroundImage: `url(${currentMap.url})`, backgroundSize: 'cover', backgroundPosition: 'center' }}>
           
-          {/* A GRADE AQUI PROTEGE O MAPA SE O CAMPO ESTIVER VAZIO, USANDO O "|| 48" */}
           {showGrid && (
             <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 10, backgroundImage: 'linear-gradient(to right, rgba(255,255,255,0.15) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.15) 1px, transparent 1px)', backgroundSize: `${gridWidth || 48}px ${gridHeight || 48}px`, backgroundPosition: '0 0' }} />
           )}
 
-          {/* ====== RENDERIZANDO CAMADA 2 ====== */}
           <svg className="absolute inset-0 w-full h-full overflow-visible" style={{ zIndex: 20, pointerEvents: 'none' }}>
             {lines.filter(l => getLayer(l) === 2).map(line => renderLine(line, false))}
           </svg>
@@ -740,7 +856,6 @@ export default function App() {
             )
           })}
 
-          {/* ====== RENDERIZANDO CAMADA 3 ====== */}
           <svg className="absolute inset-0 w-full h-full overflow-visible" style={{ zIndex: 30, pointerEvents: 'none' }}>
             {lines.filter(l => getLayer(l) === 3).map(line => renderLine(line, false))}
             {currentLine && getLayer(currentLine) === 3 && renderLine(currentLine, true)}
@@ -779,14 +894,12 @@ export default function App() {
             )
           })}
 
-          {/* CAIXA DE SELECAO */}
           {selectionBox.isSelecting && activeTool === 'cursor' && (
             <div className="absolute border-2 border-emerald-500 bg-emerald-500/20 border-dashed pointer-events-none" style={{ zIndex: 50, left: Math.min(selectionBox.startX, selectionBox.endX), top: Math.min(selectionBox.startY, selectionBox.endY), width: Math.abs(selectionBox.endX - selectionBox.startX), height: Math.abs(selectionBox.endY - selectionBox.startY) }} />
           )}
 
         </div>
 
-        {/* MENUS DE CONTEXTO */}
         {contextMenu && (
           <div className="fixed bg-neutral-950 border border-neutral-700 shadow-2xl rounded-lg py-2 w-64 z-[9999]" style={{ left: contextMenu.x, top: contextMenu.y }} onClick={e => e.stopPropagation()} onMouseDown={e => e.stopPropagation()}>
             
@@ -881,7 +994,6 @@ export default function App() {
         })()}
       </div>
 
-      {/* ====== PAINEL LATERAL DIREITO ====== */}
       <div className="w-80 bg-neutral-950 flex flex-col shadow-2xl z-40" onClick={e => e.stopPropagation()}>
         <div className="p-5 border-b border-neutral-800 bg-neutral-900 flex justify-between items-center">
           <div className="flex flex-col">
@@ -940,13 +1052,66 @@ export default function App() {
               </div>
             )}
           </div>
+
+          <div className="mb-6">
+            <button onClick={() => setIsTrilhasOpen(!isTrilhasOpen)} className="w-full flex justify-between items-center text-xs font-bold text-neutral-500 mb-3 uppercase tracking-wider hover:text-white transition-colors">
+              <span className="flex items-center gap-2"><Music size={14} /> Trilha Sonora</span>{isTrilhasOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+            {isTrilhasOpen && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2 bg-neutral-900 p-2 rounded border border-neutral-800 mb-2">
+                  <Volume2 size={16} className="text-neutral-400" />
+                  <input type="range" min="0" max="1" step="0.05" value={audioVolume} onChange={(e) => setAudioVolume(parseFloat(e.target.value))} className="w-full accent-emerald-500" />
+                </div>
+                
+                {currentAudio.url && (
+                   <div className="bg-neutral-800 p-2 rounded border border-emerald-500/50 flex justify-between items-center mb-2">
+                     <div className="flex flex-col overflow-hidden">
+                       <span className="text-[10px] text-emerald-400 font-bold uppercase">Tocando Agora</span>
+                       <span className="text-xs text-white truncate max-w-[150px]">{currentAudio.name}</span>
+                     </div>
+                     {(playerName === 'Mestre' || playerName === 'Buratino') && (
+                       <div className="flex items-center gap-1">
+                         {currentAudio.isPlaying ? (
+                           <button onClick={() => socket.emit('pauseAudio')} className="p-1.5 bg-neutral-900 hover:bg-neutral-700 rounded text-amber-500"><Pause size={14}/></button>
+                         ) : (
+                           <button onClick={() => socket.emit('resumeAudio')} className="p-1.5 bg-neutral-900 hover:bg-neutral-700 rounded text-emerald-500"><Play size={14}/></button>
+                         )}
+                         <button onClick={() => socket.emit('stopAudio')} className="p-1.5 bg-neutral-900 hover:bg-neutral-700 rounded text-red-500"><Square size={14}/></button>
+                       </div>
+                     )}
+                   </div>
+                )}
+
+                <div className="bg-neutral-900 border border-neutral-800 rounded p-2 max-h-40 overflow-y-auto space-y-2">
+                  {savedTracks.map(track => (
+                    <div key={track.id} className="bg-neutral-950 p-2 rounded border border-neutral-800 flex justify-between items-center">
+                      <span className="text-xs text-neutral-300 truncate pr-2" title={track.name}>{track.name}</span>
+                      {(playerName === 'Mestre' || playerName === 'Buratino') && (
+                        <div className="flex items-center gap-1 shrink-0">
+                           <button onClick={() => socket.emit('playAudio', track)} title="Tocar" className="p-1 text-emerald-500 hover:bg-emerald-900/30 rounded transition-colors"><Play size={14} /></button>
+                           <button onClick={() => window.confirm('Excluir música?') && socket.emit('deleteTrack', track.id)} title="Excluir" className="p-1 text-red-500 hover:bg-red-900/30 rounded transition-colors"><Trash2 size={14} /></button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {savedTracks.length === 0 && <p className="text-[10px] text-neutral-500 text-center py-2">Nenhuma música salva.</p>}
+                </div>
+                
+                {(playerName === 'Mestre' || playerName === 'Buratino') && (
+                  <form onSubmit={handleAudioUpload} className="bg-neutral-900 p-2 rounded border border-neutral-800 flex flex-col gap-2 mt-1">
+                    <input type="file" name="audioFile" accept="audio/*" required className="text-[10px] text-neutral-300 w-full file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-neutral-800 file:text-white" />
+                    <button type="submit" disabled={isUploadingTrack} className="w-full bg-neutral-800 hover:bg-neutral-700 text-[10px] font-bold p-1.5 rounded transition-colors disabled:opacity-50 flex justify-center items-center gap-2"><Upload size={12} /> {isUploadingTrack ? 'Enviando...' : 'Fazer Upload (MP3)'}</button>
+                  </form>
+                )}
+              </div>
+            )}
+          </div>
           
-          {/* ====== CHAT (min-h-[480px]) ====== */}
           <div className="flex-1 flex flex-col h-full min-h-[480px] border border-neutral-800 rounded bg-neutral-900">
             <div className="p-3 border-b border-neutral-800 flex justify-between items-center bg-neutral-950 rounded-t">
               <h2 className="text-xs font-bold text-neutral-400 uppercase tracking-wider flex items-center gap-2"><MessageSquare size={14} /> Bate-Papo & Log</h2>
               
-              {/* APENAS MESTRE OU BURATINO (eu hehe) PODEM APAGAR TUDO */}
               {(playerName === 'Mestre' || playerName === 'Buratino') && (
                 <button onClick={handleClearChat} title="Apagar Histórico" className="text-neutral-500 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
               )}
@@ -970,7 +1135,6 @@ export default function App() {
                     </a>
                   )}
 
-                  {/* APENAS MESTRE OU BURATINO PODEM APAGAR MENSAGENS INDIVIDUAIS */}
                   {(playerName === 'Mestre' || playerName === 'Buratino') && (
                     <button onClick={() => handleDeleteMessage(msg.id)} className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-500 transition-all p-1" title="Apagar mensagem">
                       <Trash2 size={14} />
