@@ -65,3 +65,11 @@ npm run build
 ```
 
 Após o npm run build, copie a pasta dist gerada para dentro da pasta do servidor no Raspberry Pi. O Node.js subir essa pasta automaticamente na porta 3001
+
+
+## Algumas imagens
+
+<img width="1916" height="915" alt="image" src="https://github.com/user-attachments/assets/76833a46-a577-4624-83a4-79fadf79f5cb" />
+
+<img width="1919" height="912" alt="image" src="https://github.com/user-attachments/assets/12fb6eaf-9539-45d9-a9a8-aa07efcef153" />
+
