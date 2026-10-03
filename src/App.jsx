@@ -10,6 +10,13 @@ const socket = io(SERVER_URL);
 const ROLES = ['Buratino', 'Alysson', 'Romeu', 'Sarah', 'Mestre'];
 const PEN_COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#eab308', '#ffffff', '#000000'];
 
+const INVENTORY_BTN_ICON = '/uploads/1791052501310-token.png';
+const NOTE_LIST_ICON = '/uploads/1791052681351-token.png';
+
+const MAX_FILE_SIZE = 10 * 1024 * 1024; 
+
+const getTimestamp = () => new Date().toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
 const getCroppedImg = async (imageSrc, pixelCrop) => {
   const image = new Image(); image.src = imageSrc; image.crossOrigin = 'anonymous'; 
   await new Promise(resolve => image.onload = resolve);
@@ -83,9 +90,19 @@ export default function App() {
   const [savedTracks, setSavedTracks] = useState([]);
   const [currentAudio, setCurrentAudio] = useState({ url: '', isPlaying: false, name: '' });
   const [isTrilhasOpen, setIsTrilhasOpen] = useState(false);
-  const [audioVolume, setAudioVolume] = useState(0.3); // Volume padrão 30%
+  const [audioVolume, setAudioVolume] = useState(0.3); 
   const [isUploadingTrack, setIsUploadingTrack] = useState(false);
   const audioRef = useRef(null);
+
+  const [inventory, setInventory] = useState({});
+  const [isInventoryOpen, setIsInventoryOpen] = useState(false);
+  const [viewingPlayer, setViewingPlayer] = useState(''); 
+  const [selectedNote, setSelectedNote] = useState(null);
+  const [isAddingNote, setIsAddingNote] = useState(false);
+  const [newNote, setNewNote] = useState({ title: '', text: '' });
+  const [noteImageFile, setNoteImageFile] = useState(null);
+  const [isUploadingNote, setIsUploadingNote] = useState(false);
+  const [transferTarget, setTransferTarget] = useState('');
 
   const activeToolRef = useRef(activeTool);
   useEffect(() => { activeToolRef.current = activeTool; }, [activeTool]);
@@ -95,6 +112,7 @@ export default function App() {
       setCurrentMap(state.currentMap); setBoardTokens(Object.values(state.tokens)); setChatMessages(state.chat || []); setLines(state.lines || []); 
       setSavedTracks(state.savedTracks || []);
       if(state.currentAudio) setCurrentAudio(state.currentAudio);
+      setInventory(state.inventory || { 'Buratino': [], 'Alysson': [], 'Romeu': [], 'Sarah': [], 'Mestre': [] });
     });
     socket.on('takenRoles', (roles) => setTakenRoles(roles));
     socket.on('savedMaps', (maps) => setSavedMaps(maps));
@@ -120,11 +138,13 @@ export default function App() {
 
     socket.on('savedTracks', (tracks) => setSavedTracks(tracks));
     socket.on('audioStateUpdated', (audioState) => setCurrentAudio(audioState));
+    socket.on('inventoryUpdated', (inv) => setInventory(inv));
 
     return () => {
       socket.off('gameState'); socket.off('takenRoles'); socket.off('savedMaps'); socket.off('savedTokens'); 
       socket.off('mapUpdated'); socket.off('tokenUpdated'); socket.off('tokenDeleted'); socket.off('chatUpdated');
       socket.off('lineAdded'); socket.off('lineRemoved'); socket.off('savedTracks'); socket.off('audioStateUpdated');
+      socket.off('inventoryUpdated');
     };
   }, []);
 
@@ -138,7 +158,6 @@ export default function App() {
         audioRef.current.src = fullUrl;
       }
       if (currentAudio.isPlaying) {
-        // Tenta tocar (o navegador permite pois o jogador já clicou no menu de login antes)
         audioRef.current.play().catch(e => console.warn("Aguardando interação para tocar o áudio"));
       } else {
         audioRef.current.pause();
@@ -480,7 +499,7 @@ export default function App() {
       author: playerName,
       text: chatInput.trim(),
       imageUrl: uploadedImageUrl,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      timestamp: getTimestamp()
     };
 
     socket.emit('sendChatMessage', msg);
@@ -494,7 +513,7 @@ export default function App() {
       type: 'roll',
       author: playerName,
       text: `Rolou um D${sides}: Tirou ${result}`,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      timestamp: getTimestamp()
     };
     socket.emit('sendChatMessage', msg);
   };
@@ -517,6 +536,13 @@ export default function App() {
     e.preventDefault();
     const file = e.target.elements.audioFile.files[0];
     if (!file) return;
+    
+    if (file.size > MAX_FILE_SIZE) {
+      alert("O arquivo de áudio não pode ter mais de 10 MB.");
+      e.target.value = null;
+      return;
+    }
+
     setIsUploadingTrack(true);
     try {
       const formData = new FormData(); formData.append('image', file);
@@ -526,6 +552,60 @@ export default function App() {
       e.target.reset();
     } catch (err) { alert("Erro ao enviar música."); }
     setIsUploadingTrack(false);
+  };
+
+  // ====== FUNÇÕES DE INVENTÁRIO ======
+  const submitNewNote = async (e) => {
+    e.preventDefault();
+    if (!newNote.title.trim()) return;
+    setIsUploadingNote(true);
+
+    let uploadedImageUrl = null;
+    if (noteImageFile) {
+      try { uploadedImageUrl = await uploadFileToServer(noteImageFile); } 
+      catch (err) { alert("Erro ao enviar imagem da nota."); setIsUploadingNote(false); return; }
+    }
+
+    const noteObj = {
+      id: Date.now().toString(),
+      title: newNote.title.trim(),
+      text: newNote.text.trim(),
+      imageUrl: uploadedImageUrl,
+      timestamp: getTimestamp()
+    };
+
+    socket.emit('addNote', { targetPlayer: viewingPlayer, note: noteObj });
+    setIsAddingNote(false);
+    setNewNote({ title: '', text: '' });
+    setNoteImageFile(null);
+    setIsUploadingNote(false);
+  };
+
+  const handleDeleteNote = (noteId) => {
+    if(window.confirm('Tem certeza que deseja destruir esta anotação?')) {
+      socket.emit('deleteNote', { targetPlayer: viewingPlayer, noteId });
+      if(selectedNote && selectedNote.id === noteId) setSelectedNote(null);
+    }
+  };
+
+  const handleTransferNote = (noteId) => {
+    if(!transferTarget) return;
+    
+    socket.emit('transferNote', { fromPlayer: viewingPlayer, toPlayer: transferTarget, noteId });
+
+    if (playerName !== 'Mestre') {
+      const logMsg = {
+        id: Date.now().toString() + 'log',
+        type: 'text',
+        author: playerName,
+        text: `📄 Transferiu uma nota para ${transferTarget}.`,
+        timestamp: getTimestamp()
+      };
+      socket.emit('sendChatMessage', logMsg);
+    }
+
+    setSelectedNote(null);
+    setTransferTarget('');
   };
 
   const uploadFileToServer = async (file) => {
@@ -545,7 +625,13 @@ export default function App() {
 
   const onFileChange = (e) => {
     if (e.target.files && e.target.files.length > 0) {
-      const reader = new FileReader(); reader.readAsDataURL(e.target.files[0]); reader.onload = () => setImageSrc(reader.result);
+      const file = e.target.files[0];
+      if (file.size > MAX_FILE_SIZE) {
+          alert("A imagem não pode ter mais de 10 MB.");
+          e.target.value = null;
+          return;
+      }
+      const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => setImageSrc(reader.result);
     }
   };
 
@@ -589,13 +675,20 @@ export default function App() {
     socket.emit('updateToken', { ...savedToken, id: Date.now().toString() + Math.random().toString(36).substr(2, 5), x: 100, y: 100, isPinned: false, layer: 2 });
   };
   
-  const tryClaimRole = (role) => socket.emit('claimRole', role, (res) => { if (res.success) setPlayerName(role); else alert('Alguém já pegou esse personagem!'); });
+  const tryClaimRole = (role) => socket.emit('claimRole', role, (res) => { 
+    if (res.success) {
+      setPlayerName(role); 
+      setViewingPlayer(role); // Define o inventário a ser visualizado
+    } else alert('Alguém já pegou esse personagem!'); 
+  });
+  
   const closeModal = () => { setIsModalOpen(false); setImageSrc(null); setFinalCroppedBlob(null); setEditingToken(null); setNewToken({ name: '', type: 'player' }); setPendingSpawnCoords(null); };
   const openEditModal = (token) => { setEditingToken(token); setNewToken({ name: token.name, type: token.type }); setImageSrc(token.imageUrl || null); setFinalCroppedBlob(null); setIsModalOpen(true); };
 
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (isModalOpen) return;
+      // Ignora atalhos ao adicionar/ler notas ou criar tokens
+      if (isModalOpen || selectedNote || isAddingNote || isInventoryOpen) return;
       if (e.target.tagName.toLowerCase() === 'input' || e.target.tagName.toLowerCase() === 'textarea') return;
 
       if (e.key === 'Delete') {
@@ -606,7 +699,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedTokenIds, selectedLineIds, lines, playerName, isModalOpen]);
+  }, [selectedTokenIds, selectedLineIds, lines, playerName, isModalOpen, selectedNote, isAddingNote, isInventoryOpen]);
 
   if (!playerName) {
     return (
@@ -692,7 +785,6 @@ export default function App() {
         <div className="flex flex-col gap-4 w-full px-2">
           
           <button title="Cursor (Selecionar e Mover)" onClick={() => handleToolClick('cursor')} className={`w-full aspect-square rounded-xl flex items-center justify-center transition-colors ${activeTool === 'cursor' ? 'bg-red-600 text-white shadow-lg' : 'text-neutral-400 hover:bg-neutral-800'}`}><MousePointer2 size={24} /></button>
-          
           <button title="Câmera (Mover e Zoom livre)" onClick={() => handleToolClick('camera')} className={`w-full aspect-square rounded-xl flex items-center justify-center transition-colors ${activeTool === 'camera' ? 'bg-red-600 text-white shadow-lg' : 'text-neutral-400 hover:bg-neutral-800'}`}><Hand size={24} /></button>
           
           <div className="relative w-full">
@@ -790,6 +882,13 @@ export default function App() {
           </div>
 
         </div>
+
+        <div className="mt-auto w-full flex justify-center pb-2">
+          <button title="Inventário de Notas" onClick={() => setIsInventoryOpen(true)} className="hover:scale-110 transition-transform drop-shadow-[0_0_10px_rgba(0,0,0,0.8)]">
+            <img src={INVENTORY_BTN_ICON} alt="Inventário de Notas" className="w-12 h-12 object-contain" />
+          </button>
+        </div>
+
       </div>
 
       <div 
@@ -1018,7 +1117,11 @@ export default function App() {
                 <form onSubmit={handleMapUpload} className="bg-neutral-900 p-3 rounded border border-neutral-800 space-y-3">
                   <span className="text-[10px] text-neutral-400 font-bold uppercase block">Novo Cenário</span>
                   <input type="text" required placeholder="Nome do Local" value={newMapName} onChange={e => setNewMapName(e.target.value)} className="w-full bg-neutral-950 border border-neutral-700 rounded p-2 text-xs text-white focus:border-red-600" />
-                  <input type="file" required accept="image/*" onChange={e => setMapFile(e.target.files[0])} className="text-[10px] text-neutral-300 w-full file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-neutral-800 file:text-white" />
+                  <input type="file" required accept="image/*" onChange={e => {
+                    const file = e.target.files[0];
+                    if (file && file.size > MAX_FILE_SIZE) { alert("A imagem do cenário não pode ter mais de 10 MB."); e.target.value = null; setMapFile(null); return; }
+                    setMapFile(file);
+                  }} className="text-[10px] text-neutral-300 w-full file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-neutral-800 file:text-white" />
                   <button type="submit" disabled={isUploadingMap || !mapFile} className="w-full bg-neutral-800 hover:bg-neutral-700 text-xs font-bold p-2 rounded transition-colors disabled:opacity-50 flex items-center justify-center gap-2"><Upload size={14} /> {isUploadingMap ? 'Enviando...' : 'Fazer Upload'}</button>
                 </form>
               </div>
@@ -1111,7 +1214,6 @@ export default function App() {
           <div className="flex-1 flex flex-col h-full min-h-[480px] border border-neutral-800 rounded bg-neutral-900">
             <div className="p-3 border-b border-neutral-800 flex justify-between items-center bg-neutral-950 rounded-t">
               <h2 className="text-xs font-bold text-neutral-400 uppercase tracking-wider flex items-center gap-2"><MessageSquare size={14} /> Bate-Papo & Log</h2>
-              
               {(playerName === 'Mestre' || playerName === 'Buratino') && (
                 <button onClick={handleClearChat} title="Apagar Histórico" className="text-neutral-500 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
               )}
@@ -1126,15 +1228,12 @@ export default function App() {
                     <span className="font-bold text-emerald-500 text-xs">{msg.author}</span>
                     <span className="text-[10px] text-neutral-600">{msg.timestamp}</span>
                   </div>
-                  
                   {msg.text && <p className="text-neutral-300 break-words pr-6">{msg.text}</p>}
-                  
                   {msg.imageUrl && (
                     <a href={SERVER_URL + msg.imageUrl} target="_blank" rel="noreferrer">
                       <img src={SERVER_URL + msg.imageUrl} alt="Anexo" className="mt-2 rounded max-w-full max-h-40 border border-neutral-700 hover:border-neutral-500 transition-colors cursor-zoom-in" />
                     </a>
                   )}
-
                   {(playerName === 'Mestre' || playerName === 'Buratino') && (
                     <button onClick={() => handleDeleteMessage(msg.id)} className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-500 transition-all p-1" title="Apagar mensagem">
                       <Trash2 size={14} />
@@ -1155,7 +1254,11 @@ export default function App() {
               <div className="flex items-end gap-2">
                 <label className="cursor-pointer text-neutral-400 hover:text-emerald-400 transition-colors p-2 bg-neutral-900 rounded border border-neutral-700 hover:border-emerald-500">
                   <Paperclip size={16} />
-                  <input type="file" accept="image/*" className="hidden" onChange={(e) => setChatImageFile(e.target.files[0])} />
+                  <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                    const file = e.target.files[0];
+                    if (file && file.size > MAX_FILE_SIZE) { alert("A imagem não pode ter mais de 10 MB."); e.target.value = null; setChatImageFile(null); return; }
+                    setChatImageFile(file);
+                  }} />
                 </label>
                 <textarea 
                   value={chatInput} onChange={(e) => setChatInput(e.target.value)} 
@@ -1176,12 +1279,11 @@ export default function App() {
               {[20, 12, 10, 8, 6, 4].map(d => <button key={d} onClick={() => rollDice(d)} className="bg-neutral-800 hover:bg-red-900 border border-neutral-700 hover:border-red-500 rounded py-2 text-xs font-bold transition-all">D{d}</button>)}
             </div>
           </div>
-          
         </div>
       </div>
 
       {isModalOpen && (
-        <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-50" onClick={e => e.stopPropagation()}>
+        <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-[100]" onClick={e => e.stopPropagation()}>
           <div className="bg-neutral-900 border border-neutral-700 rounded-lg p-6 w-96 shadow-2xl">
             <div className="flex justify-between items-center mb-6">
               <h2 className="text-lg font-bold text-white uppercase tracking-wider">{editingToken ? 'Editar Token' : 'Novo Token'}</h2>
@@ -1230,6 +1332,108 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {isInventoryOpen && !selectedNote && (
+        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[100] p-4" onClick={() => setIsInventoryOpen(false)}>
+          <div className="bg-neutral-900 border border-neutral-700 w-full max-w-md h-[80vh] max-h-[600px] rounded-xl shadow-2xl flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+            
+            <div className="flex justify-between items-center p-4 border-b border-neutral-800 bg-neutral-950">
+              <h2 className="font-bold text-white uppercase tracking-wider flex items-center gap-3">
+                <img src={INVENTORY_BTN_ICON} className="w-8 h-8" alt="Inventário" /> Inventário de Notas
+              </h2>
+              <button onClick={() => setIsInventoryOpen(false)} className="text-neutral-400 hover:text-red-500"><X size={20}/></button>
+            </div>
+
+            {playerName === 'Mestre' && (
+              <div className="p-3 bg-neutral-800 border-b border-neutral-700 flex justify-between items-center">
+                <select value={viewingPlayer} onChange={e => setViewingPlayer(e.target.value)} className="bg-neutral-900 text-sm text-emerald-400 font-bold p-1 rounded border border-neutral-700 focus:outline-none">
+                  {ROLES.map(r => <option key={r} value={r}>Inventário de: {r}</option>)}
+                </select>
+                <button onClick={() => setIsAddingNote(!isAddingNote)} className="bg-emerald-600 hover:bg-emerald-500 text-white p-1.5 rounded flex items-center gap-1 text-xs font-bold transition-colors">
+                  {isAddingNote ? <X size={14}/> : <PlusCircle size={14}/>} {isAddingNote ? 'Cancelar' : 'Nova Nota'}
+                </button>
+              </div>
+            )}
+
+            {isAddingNote && playerName === 'Mestre' ? (
+              <form onSubmit={submitNewNote} className="p-4 flex-1 overflow-y-auto bg-neutral-900 space-y-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-neutral-400 mb-1 uppercase">Título da Nota</label>
+                  <input required type="text" value={newNote.title} onChange={e => setNewNote({...newNote, title: e.target.value})} className="w-full bg-neutral-950 border border-neutral-700 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-500" placeholder="Ex: Diário Ensanguentado" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-neutral-400 mb-1 uppercase">Texto (Opcional)</label>
+                  <textarea value={newNote.text} onChange={e => setNewNote({...newNote, text: e.target.value})} className="w-full bg-neutral-950 border border-neutral-700 rounded p-2 text-sm text-white h-32 resize-none focus:outline-none focus:border-emerald-500" placeholder="Escreva o conteúdo da nota aqui..." />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-neutral-400 mb-1 uppercase">Imagem Anexa (Opcional)</label>
+                  <input type="file" accept="image/*" onChange={(e) => {
+                    const file = e.target.files[0];
+                    if (file && file.size > MAX_FILE_SIZE) { alert("A imagem não pode ter mais de 10 MB."); e.target.value = null; setNoteImageFile(null); return; }
+                    setNoteImageFile(file);
+                  }} className="text-xs text-neutral-300 w-full file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-neutral-800 file:text-white" />
+                </div>
+                <button type="submit" disabled={isUploadingNote} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2 rounded uppercase tracking-wider text-sm disabled:opacity-50 mt-4">
+                  {isUploadingNote ? 'Enviando...' : 'Adicionar Nota ao Inventário'}
+                </button>
+              </form>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-neutral-900">
+                {(!inventory[viewingPlayer] || inventory[viewingPlayer].length === 0) && (
+                  <p className="text-center text-neutral-500 text-sm mt-10">O inventário de {viewingPlayer} está vazio.</p>
+                )}
+                {(inventory[viewingPlayer] || []).map(note => (
+                  <div key={note.id} onClick={() => setSelectedNote(note)} className="bg-neutral-950 hover:bg-neutral-800 border border-neutral-700 p-3 rounded-lg flex items-center gap-4 cursor-pointer transition-colors group">
+                    <img src={NOTE_LIST_ICON} alt="Icone Nota" className="w-10 h-10 object-contain drop-shadow-md group-hover:scale-110 transition-transform" />
+                    <div className="flex flex-col">
+                      <span className="text-white font-bold text-sm">{note.title}</span>
+                      <span className="text-[10px] text-neutral-500">{note.timestamp}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {selectedNote && (
+        <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-[100] backdrop-blur-sm p-8" onClick={() => setSelectedNote(null)}>
+          <div className="bg-neutral-900/95 border border-neutral-700 w-full max-w-2xl max-h-[90vh] rounded-xl shadow-[0_0_50px_rgba(0,0,0,0.8)] flex flex-col overflow-hidden relative" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setSelectedNote(null)} className="absolute top-4 right-4 text-neutral-400 hover:text-white bg-neutral-900 rounded-full p-1 border border-neutral-700 z-10"><X size={20}/></button>
+
+            <div className="p-8 flex-1 overflow-y-auto">
+              <h2 className="text-3xl font-bold text-amber-500 mb-6 font-serif border-b border-neutral-700/50 pb-4">{selectedNote.title}</h2>
+              {selectedNote.imageUrl && (
+                <a href={SERVER_URL + selectedNote.imageUrl} target="_blank" rel="noreferrer">
+                  <img src={SERVER_URL + selectedNote.imageUrl} alt="Anexo" className="max-w-full rounded shadow-xl border border-neutral-700 mb-6 mx-auto cursor-zoom-in max-h-[400px] object-contain" />
+                </a>
+              )}
+              {selectedNote.text && (
+                <p className="text-neutral-200 whitespace-pre-wrap leading-relaxed font-serif text-lg">{selectedNote.text}</p>
+              )}
+            </div>
+
+            <div className="bg-neutral-950 p-4 border-t border-neutral-800 flex justify-between items-center gap-4">
+              <div className="flex items-center gap-2">
+                <select value={transferTarget} onChange={e => setTransferTarget(e.target.value)} className="bg-neutral-900 text-xs text-white p-2 rounded border border-neutral-700 focus:outline-none">
+                  <option value="">Transferir para...</option>
+                  {ROLES.filter(r => r !== viewingPlayer && r !== 'Mestre').map(r => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+                <button onClick={() => handleTransferNote(selectedNote.id)} disabled={!transferTarget} className="bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold py-2 px-4 rounded disabled:opacity-50 transition-colors">
+                  Enviar
+                </button>
+              </div>
+              <button onClick={() => handleDeleteNote(selectedNote.id)} className="bg-neutral-900 hover:bg-red-900/50 text-red-500 text-xs font-bold py-2 px-4 rounded border border-neutral-800 hover:border-red-500 transition-colors flex items-center gap-2">
+                <Trash2 size={14}/> Apagar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
