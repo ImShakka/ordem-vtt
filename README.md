@@ -14,6 +14,7 @@ Um Virtual Tabletop (VTT) customizado feito para mim e meus amigos jogarmos noss
   - **Grid Ajustável:** Malha de cenário com medidas configuráveis (X e Y)
 - **Gestão de Personagens:** Upload de imagens com sistema de recorte (Crop) circular embutido. Categorização por Jogador, Inimigo, NPC e Objeto.
 - **Rolagem de Dados:** Histórico de chat e rolagem de dados embutido na barra lateral.
+- **Inventário de Notas:** Os jogadores possuem um invetário onde podem visualizar todas as notas que acharem durante a campanha
 
 ## Tecnologias Utilizadas
 
@@ -72,4 +73,5 @@ Após o npm run build, copie a pasta dist gerada para dentro da pasta do servido
 <img width="1916" height="915" alt="image" src="https://github.com/user-attachments/assets/76833a46-a577-4624-83a4-79fadf79f5cb" />
 
 <img width="1919" height="912" alt="image" src="https://github.com/user-attachments/assets/12fb6eaf-9539-45d9-a9a8-aa07efcef153" />
+
 
